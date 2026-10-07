@@ -131,11 +131,11 @@ HTTP port is `8083`; the dev-mode debug port is `5006`.
 2. Navigate to the project directory: `cd train-ceq-app`
 3. Start an MQTT broker and Kafka, and set the variables above if they are not on
    `localhost`.
-4. Run the application: `mvn compile quarkus:dev`
+4. Run the application: `./mvnw compile quarkus:dev`
 
-Dev mode needs **JDK 17 and Maven on the host**. Use `mvn`, not `./mvnw` — see Known
-issues. Building the container image needs neither; see
-[Building the image](#building-the-image).
+Dev mode needs **JDK 17 on the host**. Maven itself is optional — `./mvnw` bootstraps it.
+Packaging and building the container image need neither; see
+[Building from source](#building-from-source) and [Building the image](#building-the-image).
 
 Every component of this demo talks to the same broker, so the mosquitto setup is
 documented once, in
@@ -154,6 +154,50 @@ only in setting `user mosquitto` and logging to a file rather than stdout.)
 > the repository, and it publishes port 8082, which collides with the capture app. The
 > maintained local stack lives in the
 > [gitops](https://github.com/redhatnsp/gitops) repository under `podman-compose-shadow/`.
+
+## Building from source
+
+`./mvnw` works from a clean clone — the wrapper files under `.mvn/wrapper/` are committed.
+With a JDK 17 on the host:
+
+```sh
+./mvnw -B clean package
+```
+
+To keep the toolchain off the host entirely, run the same command in a JDK container with
+the repository bind-mounted:
+
+```sh
+podman run --rm -v "$PWD":/project:z -v "$HOME/.m2":/root/.m2:z -w /project \
+  docker.io/library/eclipse-temurin:17-jdk ./mvnw -B clean package
+```
+
+The `~/.m2` mount is a **cache, not a requirement** — it holds the dependency tree and the
+Maven distribution the wrapper downloads. Drop it and the build still succeeds, it just
+re-fetches everything on every run. No `settings.xml` is needed either: the pom declares no
+`<repositories>`, and the platform is `io.quarkus.platform` (Maven Central) rather than the
+Red Hat productised `com.redhat.quarkus.platform`. Verified against a cold cache on
+2026-10-07.
+
+Output lands in `target/`:
+
+```
+target/
+├── train-ceq-app-1.0.0-SNAPSHOT.jar    ~13 KB   thin jar — this project's classes only
+└── quarkus-app/                        ~154 MB  the deployable (Quarkus fast-jar layout)
+    ├── quarkus-run.jar                          run this
+    ├── app/                                     application classes
+    ├── lib/                                     dependencies
+    └── quarkus/                                 generated bootstrap
+```
+
+The thin jar at the top is **not** runnable on its own. `quarkus-run.jar` is a manifest
+pointing at its sibling directories, so the whole `target/quarkus-app/` tree has to travel
+together:
+
+```sh
+java -jar target/quarkus-app/quarkus-run.jar
+```
 
 ## Building the image
 
@@ -185,12 +229,6 @@ script cannot publish by accident.
 
 ## Known issues
 
-- **`./mvnw` does not work in this repository.** `mvnw` and `mvnw.cmd` are committed but
-  the `.mvn/wrapper/` directory is not, so the wrapper tries to download
-  `maven-wrapper.jar` into a directory that does not exist. Use `mvn` on the host, or
-  `./build-image.sh`, which sidesteps it entirely. The sibling repositories
-  (`train-capture-image-app`, `train-monitoring-app`) do ship the wrapper files, so this
-  one is the odd case.
 - **Only the first detection is used.** `CommandProcessor` takes `detections.get(0)` with
   no ranking, so when a SpeedLimit and a DangerAhead sign are both in frame, which one
   steers the train is effectively arbitrary.
